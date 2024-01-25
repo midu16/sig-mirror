@@ -1,0 +1,21 @@
+ocp_release_version: 4.14.9
+redhat_operator_index_version: v4.14
+release_number: 24R4
+registry_fqdn: rock5b.offline.oxtechnix.lan
+registry_port: 5000
+operator_list:
+#  - 'advanced-cluster-management'
+#  - 'multicluster-engine'
+#  - 'topology-aware-lifecycle-manager'
+#  - 'openshift-gitops-operator'
+#  - 'cincinnati-operator'
+#  - 'odf-operator'
+#  - 'ptp-operator'
+  - 'lvms-operator'
+#  - 'mcg-operator'
+#  - 'ocs-operator'
+#  - 'odf-csi-addons-operator'
+#  - 'sriov-network-operator'
+#  - 'cluster-logging'
+#  - 'local-storage-operator'
+signer_email: midu@redhat.com
