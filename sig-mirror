@@ -180,7 +180,7 @@ mirroring_to_cache_registry () {
   if echo "$netcat_output" | grep -q "succeeded"; then
     echo "Connection succeeded to the Cache-Registry. Proceeding with mirroring."
     # Run oc-mirror command mirror the packages to the Cache-Registry and capture the output
-    local mirroring_to_cache_registry_var=$(oc-mirror --config "${working_directory}/imageset-config.yaml" "docker://${registry_fqdn}:${registry_port}/${target_tag,,}")
+    local mirroring_to_cache_registry_var=$(oc-mirror --config "${working_directory}/imageset-config.yaml" "docker://${registry_fqdn}:${registry_port}/${target_tag,,}" --dest-skip-tls=true)
     # echo ${mirroring_to_cache_registry_var}
     # Check the return code
     if [ $? -eq 0 ]; then
@@ -217,18 +217,48 @@ signing_images () {
     echo "---------------------------------------------------------------"
     echo "Signing the operator image and push to Offline-Registry cache:"
     # Perform skopeo copy with signature
-    skopeo copy --sign-by "${SIGNER_EMAIL}" "docker://${IMAGE}" "${DestImage}"
+    skopeo copy --sign-by "${SIGNER_EMAIL}" "docker://${IMAGE}" "${DestImage}" --dest-tls-verify=false --src-tls-verify=false 
 
     echo "---------------------------------------------------------------"
     echo "Preparing the localhost directory clone:"    
     # Perform skopeo copy to local directory to prepare the bundle.tar.gz
     skopeo copy --format oci "${DestImage}" "dir:${InternalReleaseDir}/${IMAGE_NAME_DIGEST}"
     echo "---------------------------------------------------------------"
+    # skopeo copy "dir:${InternalReleaseDir}/${IMAGE_NAME_DIGEST}" "docker://inbacrnrdl0100.offline.oxtechnix.lan:5000/${target_tag,,}/${IMAGE_NAME_DIGEST}"
     # Print a newline for better readability
     echo
   done < <(cat "${ImageListFile}" | awk -F= '{print $2}')
 }
 
+# Prepare the /home/<username>/.local/share/containers/sigstore/signed/${target_tag}/Images[@]/ MachineConfig function
+sigstore_machineconfig () {
+  local sigstore_dir="${HOME}/.local/share/containers/sigstore/signed/"
+}
+
+
+
+release_bundle () {
+  #Creating the release bundle packing everything for air-gap environment availability
+
+  local files_and_dirs=(
+    "config.yaml"
+    "oc-mirror-workspace"
+    "README.md"
+    "sig-work-dir"
+  )
+
+  # Get the current date in the format YYMMDD
+  date_string=$(date +"%y%m%d")
+
+  # Define the archive file name with the date
+  archive_name="${target_tag,,}_${date_string}.tar.gz"
+
+  # Create the tar.gz archive
+  # Use tar to create the archive
+  local BundleCreate=$(tar -czvf "${archive_name}" "${files_and_dirs[@]}")
+
+  echo "Archive created: ${archive_file}"
+}
 # Prepare the Internal Signed Build
 # _main_
 # Variable that defines the signature-working-directory
@@ -260,3 +290,4 @@ working_dir_generator
 get_latest_version "${operator_list[@]}"
 mirroring_to_cache_registry
 signing_images
+release_bundle

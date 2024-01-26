@@ -2,6 +2,11 @@
 
 The `sig-mirror` tool is a utility script for mirroring, caching self-signing all the container-base-images from the Red Hat Operator Catalog to a Air Gap environment
 
+
+
+:warning: **`sig-mirror` tool is a community project, it is not supported by Red Hat in any way.** :warning:
+
+
 ## Maintainer
 
 [Mihai IDU](mailto:midu@redhat.com)
