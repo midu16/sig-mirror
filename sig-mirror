@@ -34,7 +34,7 @@ read_yaml() {
   export registry_fqdn=$(yq e '.registry_fqdn' "$yaml_file")
   export registry_port=$(yq e '.registry_port' "$yaml_file")
   export operator_list=($(yq e '.operator_list | join(" ")' "$yaml_file"))
-  export registry_port=$(yq e '.signer_email' "$yaml_file")
+  export signer_email=$(yq e '.signer_email' "$yaml_file")
 }
 
 # Making sure that we have the dependencies alligned with the release
@@ -211,7 +211,7 @@ signing_images () {
     # Extract image details
     SourceImage=$(echo "$IMAGE" | cut -d'/' -f2-)
     echo $SourceImage >> "${working_directory}/bundle-mirror.log"
-    DestImage="docker://${REGISTRY}/signed/${SourceImage}"
+    DestImage="docker://${registry_fqdn}:${registry_port}/signed/${SourceImage}"
     
     IMAGE_NAME_DIGEST=$(echo "$IMAGE" | awk -F'/' '{print $NF}')
     echo "---------------------------------------------------------------"

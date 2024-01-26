@@ -5,6 +5,7 @@ The `sig-mirror` tool is a utility script for mirroring, caching self-signing al
 ## Maintainer
 
 [Mihai IDU](mailto:midu@redhat.com)
+[Teresa Giner](mailto:tginer@redhat.com)
 
 ## License
 
@@ -30,9 +31,10 @@ Edit the `config.yaml` file to set the following parameters:
 The following dependencies are required to run the `sig-mirror` tool:
 
 - yq: YAML processor.
-- skopeo
-- oc
-- oc-mirror
+- skopeo: Command line utility used to interact with local and remote container images and container image registries
+- oc: OpenShift Client
+    - oc-mirror: OpenShift Client plugin used for mirroring 
+- gpg: OpenPGP encryption and signing tool
 
 
 ## Installation
