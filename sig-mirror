@@ -180,7 +180,7 @@ mirroring_to_cache_registry () {
   if echo "$netcat_output" | grep -q "succeeded"; then
     echo "Connection succeeded to the Cache-Registry. Proceeding with mirroring."
     # Run oc-mirror command mirror the packages to the Cache-Registry and capture the output
-    local mirroring_to_cache_registry_var=$(oc-mirror --config "${working_directory}/imageset-config.yaml" "docker://${registry_fqdn}:${registry_port}/${target_tag,,}" --dest-skip-tls=true)
+    local mirroring_to_cache_registry_var=$(oc-mirror --config "${working_directory}/imageset-config.yaml" "docker://${registry_fqdn}:${registry_port}/${target_tag,,}")
     # echo ${mirroring_to_cache_registry_var}
     # Check the return code
     if [ $? -eq 0 ]; then
@@ -217,12 +217,12 @@ signing_images () {
     echo "---------------------------------------------------------------"
     echo "Signing the operator image and push to Offline-Registry cache:"
     # Perform skopeo copy with signature
-    skopeo copy --sign-by "${SIGNER_EMAIL}" "docker://${IMAGE}" "${DestImage}" --dest-tls-verify=false --src-tls-verify=false
+    skopeo copy --sign-by "${SIGNER_EMAIL}" "docker://${IMAGE}" "${DestImage}"
 
     echo "---------------------------------------------------------------"
     echo "Preparing the localhost directory clone:"    
     # Perform skopeo copy to local directory to prepare the bundle.tar.gz
-#    skopeo copy --format oci "${DestImage}" "dir:${InternalReleaseDir}/${IMAGE_NAME_DIGEST}"
+    skopeo copy --format oci "${DestImage}" "dir:${InternalReleaseDir}/${IMAGE_NAME_DIGEST}"
     echo "---------------------------------------------------------------"
     # Print a newline for better readability
     echo
