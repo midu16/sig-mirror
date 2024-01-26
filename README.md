@@ -10,6 +10,7 @@ The `sig-mirror` tool is a utility script for mirroring, caching self-signing al
 ## Maintainer
 
 [Mihai IDU](mailto:midu@redhat.com)
+
 [Teresa Giner](mailto:tginer@redhat.com)
 
 ## License
@@ -40,7 +41,7 @@ The following dependencies are required to run the `sig-mirror` tool:
 - oc: OpenShift Client
     - oc-mirror: OpenShift Client plugin used for mirroring 
 - gpg: OpenPGP encryption and signing tool
-
+- Cache-Registry certificates are known to the `sig-mirror` host
 
 ## Installation
 
