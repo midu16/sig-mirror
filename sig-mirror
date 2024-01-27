@@ -18,7 +18,7 @@
 MAINTAINER_EMAIL="midu@redhat.com"
 
 # Variables read from the config.yaml file managed by the user
-read_yaml() {
+read_yaml () {
   local yaml_file="$1"
 
   # Check if the YAML file exists
@@ -35,10 +35,22 @@ read_yaml() {
   export registry_port=$(yq e '.registry_port' "$yaml_file")
   export operator_list=($(yq e '.operator_list | join(" ")' "$yaml_file"))
   export signer_email=$(yq e '.signer_email' "$yaml_file")
+  # Check if required variables are missing
+  if [ -z "$ocp_release_version" ] || [ -z "$redhat_operator_index_version" ] || \
+     [ -z "$release_number" ] || [ -z "$registry_fqdn" ] || [ -z "$registry_port" ] || \
+     [ -z "$signer_email" ] || [ ${#operator_list[@]} -eq 0 ]; then
+    echo "Error: Missing required variables in the YAML file."
+    return 1
+    exit 1
+  else
+    echo "YAML file validation passed."
+    return 0
+  fi
+
 }
 
-# Making sure that we have the dependencies alligned with the release
-dependencies_checker() {
+# Making sure that we have all the dependencies alligned with the release and made available
+dependencies_checker () {
   local dependencies_directory="${working_directory}/dependencies"
 
   # Check if the dependencies directory exists
@@ -49,19 +61,31 @@ dependencies_checker() {
 
   # Public File URLs
   yq_binary_url="https://github.com/mikefarah/yq/releases/download/v4.40.5/yq_linux_arm64.tar.gz"
+  cosign_binary_url="https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64"
 
   # Check if yq binary exists, download and extract if not
   if [ ! -f "${dependencies_directory}/yq" ]; then
-    # Download and extract oc-mirror
+    # Download and extract yq
     curl -sSL "${yq_binary_url}" -o "${dependencies_directory}/yq_linux_arm64.tar.gz"
     # Untar the downloaded file in the specified directory
     tar -xzvf "${dependencies_directory}/yq_linux_arm64.tar.gz" -C "${dependencies_directory}"
-    # Make sure that the oc its executable
+    # Make sure that the yq its executable
     chmod +x "${dependencies_directory}/yq_linux_arm64"
     # Changing the naming
     mv "${dependencies_directory}/yq_linux_arm64" "${dependencies_directory}/yq"
   else
     echo "${dependencies_directory}/yq exists."
+  fi
+  # Check if cosign binary exists, download and extract if not
+  if [ ! -f "${dependencies_directory}/cosign" ]; then
+    # Download and extract cosign
+    curl -sSL "${cosign_binary_url}" -o "${dependencies_directory}/cosign-linux-amd64"
+    # Make sure that the cosign its executable
+    chmod +x "${dependencies_directory}/cosign-linux-amd64"
+    # Changing the naming
+    mv "${dependencies_directory}/cosign-linux-amd64" "${dependencies_directory}/cosign"
+  else
+    echo "${dependencies_directory}/cosign exists."
   fi
   export PATH="$PATH:$dependencies_directory"
   #echo $PATH #only for debugging
@@ -186,7 +210,7 @@ mirroring_to_cache_registry () {
     if [ $? -eq 0 ]; then
       echo "imageset-config.yaml mirroring is complete."
       local output_mirroring_file="mirroring-oc-mirror.log"
-      echo "$mirroring_to_cache_registry_var" > "${working_directory}/${output_mirroring_file}"
+      echo "${mirroring_to_cache_registry_var}" > "${working_directory}/${output_mirroring_file}"
     else
       echo "Error: imageset-config.yaml mirroring failed. Make sure to check the .oc-mirror.log file made available."
     fi
@@ -197,6 +221,7 @@ mirroring_to_cache_registry () {
 }
 
 # Sign all the container base images mirrored to the Cache-Registry
+# Assumption here is that the self-signature its made available before the script is running
 signing_images () {
   local ImageListFile=$( cat sig-work-dir/mirroring-oc-mirror.log | grep -oP 'oc-mirror-workspace/results-\d+/mapping.txt' | head -n 1)
   local InternalReleaseDir="${working_directory}/${target_tag,,}"
@@ -214,16 +239,30 @@ signing_images () {
     DestImage="docker://${registry_fqdn}:${registry_port}/signed/${SourceImage}"
     
     IMAGE_NAME_DIGEST=$(echo "$IMAGE" | awk -F'/' '{print $NF}')
-    echo "---------------------------------------------------------------"
+    echo "==============================================================="
     echo "Signing the operator image and push to Offline-Registry cache:"
     # Perform skopeo copy with signature
-    skopeo copy --sign-by "${SIGNER_EMAIL}" "docker://${IMAGE}" "${DestImage}" --dest-tls-verify=false --src-tls-verify=false 
+    skopeo copy --sign-by "${signer_email}" "docker://${IMAGE}" "${DestImage}" --dest-tls-verify=false --src-tls-verify=false
+    # Validate the return code of each image processed.
+    if [ $? -eq 0 ]; then
+      echo "Image signed and pushed successfully to the Cache-Registry: ${registry_fqdn}:${registry_port} ."
+    else
+      echo "Error: Failed to sign and push the image: ${IMAGE}."
+      exit 1
+    fi
 
     echo "---------------------------------------------------------------"
     echo "Preparing the localhost directory clone:"    
     # Perform skopeo copy to local directory to prepare the bundle.tar.gz
     skopeo copy --format oci "${DestImage}" "dir:${InternalReleaseDir}/${IMAGE_NAME_DIGEST}"
-    echo "---------------------------------------------------------------"
+    # Validate the return code of each image processed.
+    if [ $? -eq 0 ]; then
+      echo "Image copied to local directory successfully."
+    else
+      echo "Error: Failed to copy the image: ${IMAGE} to the local directory."
+      exit 1
+    fi
+
     # skopeo copy "dir:${InternalReleaseDir}/${IMAGE_NAME_DIGEST}" "docker://inbacrnrdl0100.offline.oxtechnix.lan:5000/${target_tag,,}/${IMAGE_NAME_DIGEST}"
     # Print a newline for better readability
     echo
@@ -233,6 +272,7 @@ signing_images () {
 # Prepare the /home/<username>/.local/share/containers/sigstore/signed/${target_tag}/Images[@]/ MachineConfig function
 sigstore_machineconfig () {
   local sigstore_dir="${HOME}/.local/share/containers/sigstore/signed/"
+  local ImageListFile=$( cat sig-work-dir/mirroring-oc-mirror.log | grep -oP 'oc-mirror-workspace/results-\d+/mapping.txt' | head -n 1)
 }
 
 
@@ -252,13 +292,107 @@ release_bundle () {
 
   # Define the archive file name with the date
   archive_name="${target_tag,,}_${date_string}.tar.gz"
-
+  echo "==============================================================="
+  echo "Preparing ${archive_name}. Loading.."
   # Create the tar.gz archive
   # Use tar to create the archive
   local BundleCreate=$(tar -czvf "${archive_name}" "${files_and_dirs[@]}")
-
-  echo "Archive created: ${archive_file}"
+  local BundleCreationLogs="bundle-creation.log"
+  echo "${BundleCreationLogs}" > "${working_directory}/${BundleCreationLogs}"
+  if [ $? -eq 0 ]; then
+    echo "Completed!"
+    echo "Internal bundle release created: $(pwd)/${archive_name}"
+  else
+    echo "Internal bundle release creationg failed. Please check logs: ${working_directory}/${BundleCreationLogs}"
+    exit 1
+  fi
+  echo
+  echo "==============================================================="
+  echo "Preparing ${archive_name}.sign. Loading.."
+  # Once the bundle release has been created, make sure that it gets sign
+  # gpg --detach-sign --local-user midu@redhat.com --output 24r4-ocp-4.14.9-someone.24.01.27_240127.tar.gz.sign ./24r4-ocp-4.14.9-someone.24.01.27_240127.tar.gz
+  local BundleSign=$(gpg --detach-sign --local-user "${signer_email}" --output "$(pwd)/${archive_name}.sign" "$(pwd)/${archive_name}")
+  local BundleCreationSignLogs="bundle-creation-sign.log"
+  echo "${BundleCreationSignLogs}" > "${working_directory}/${BundleCreationSignLogs}"
+  if [ $? -eq 0 ]; then
+    echo "Completed!"
+    echo "Internal bundle release signature created: $(pwd)/${archive_name}.sign"
+  else
+    echo "Internal bundle release creationg failed. Please check logs: ${working_directory}/${BundleCreationSignLogs}"
+    exit 1
+  fi
 }
+
+# OS Distribution validation
+
+# Function to get the operating system distribution
+get_os_distribution () {
+  if [ -e /etc/os-release ]; then
+    # Source the os-release file
+    . /etc/os-release
+    if [ -n "$ID" ]; then
+      echo "$ID"
+    else
+      echo "Unknown"
+    fi
+  else
+    echo "Unknown"
+  fi
+}
+
+# Function to validate the operating system distribution
+validate_os_distribution () {
+  local supported_distributions=("centos" "rhel" "fedora")
+
+  local os_distribution=$(get_os_distribution | tr '[:upper:]' '[:lower:]')
+
+  if [[ " ${supported_distributions[@]} " =~ " $os_distribution " ]]; then
+    echo "Supported operating system: $os_distribution"
+    return 0
+  else
+    echo "Unsupported operating system: $os_distribution"
+    return 1
+  fi
+}
+
+# As pre-main I would like to make sure that all the root system user dependencies are made available to my
+#root-less priviledged user
+#
+# Function to check if a command is available
+command_exists () {
+  command -v "$1" >/dev/null 2>&1
+}
+
+# Function to validate dependencies
+validate_dependencies() {
+  local dependencies=("podman" "skopeo" "gpg")
+
+  for dependency in "${dependencies[@]}"; do
+    if ! command_exists "$dependency"; then
+      echo "Error: $dependency is not installed. Please install it before proceeding."
+      return 1
+    fi
+  done
+
+  return 0
+}
+
+## Usage
+#validate_dependencies
+#if [ $? -eq 0 ]; then
+#  echo "All dependencies are installed."
+#else
+#  echo "Dependency validation failed."
+#fi
+# Example usage
+#validate_os_distribution
+#if [ $? -eq 0 ]; then
+#  echo "Operating system validation passed."
+#else
+#  echo "Operating system validation failed."
+#fi
+
+
 # Prepare the Internal Signed Build
 # _main_
 # Variable that defines the signature-working-directory
