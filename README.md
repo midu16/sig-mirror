@@ -31,7 +31,7 @@ Edit the `config.yaml` file to set the following parameters:
 - registry_fqdn: Fully qualified domain name of the cache registry.
 - registry_port: Port number of the cache registry.
 - operator_list: List of operators to mirror.
-
+- signer_email: `gpg` email-ID configured on the host for self-sign
 ## Dependencies
 
 The following dependencies are required to run the `sig-mirror` tool:
@@ -42,6 +42,7 @@ The following dependencies are required to run the `sig-mirror` tool:
     - oc-mirror: OpenShift Client plugin used for mirroring 
 - gpg: OpenPGP encryption and signing tool
 - Cache-Registry certificates are known to the `sig-mirror` host
+- `config.yaml.example` represints an example config file.
 
 ## Installation
 

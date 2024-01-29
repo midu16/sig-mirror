@@ -52,11 +52,12 @@ read_yaml () {
 # Making sure that we have all the dependencies alligned with the release and made available
 dependencies_checker () {
   local dependencies_directory="${working_directory}/dependencies"
-
+  local MachineConfigDirectory="${working_directory}/mc"
   # Check if the dependencies directory exists
-  if [ ! -d "$dependencies_directory" ]; then
+  if [ ! -d "${dependencies_directory}" ]; then
       # Create the working directory if it doesn't exist
-      mkdir -p "$dependencies_directory"
+      mkdir -p "${dependencies_directory}"
+      mkdir -p "${MachineConfigDirectory}"
   fi
 
   # Public File URLs
@@ -102,8 +103,9 @@ ocp_dependencies_checker() {
   fi
 
   # Public File URLs
-  oc_mirror_url="$redhat_binary_preparation_url/$ocp_release_version/oc-mirror.tar.gz"
-  openshift_client_url="$redhat_binary_preparation_url/$ocp_release_version/openshift-client-linux-$ocp_release_version.tar.gz"
+  oc_mirror_url="${redhat_binary_preparation_url}/${ocp_release_version}/oc-mirror.tar.gz"
+  openshift_client_url="${redhat_binary_preparation_url}/${ocp_release_version}/openshift-client-linux-${ocp_release_version}.tar.gz"
+  butane_client_url="${redhat_butane_binary_url}/latest/butane"
 
   # Check if oc-mirror binary exists, download and extract if not
   if [ ! -f "${dependencies_directory}/oc-mirror" ]; then
@@ -128,6 +130,17 @@ ocp_dependencies_checker() {
   else
     echo "${dependencies_directory}/oc exists."
   fi
+  
+  # Check if butane binary exists, download and extract if not
+  if [ ! -f "${dependencies_directory}/butane" ]; then
+    # Download and extract butane
+    curl -sSL "${butane_client_url}" -o "${dependencies_directory}/butane"
+    # Make sure that the butane its executable
+    chmod +x "${dependencies_directory}/butane"
+  else
+    echo "${dependencies_directory}/butane exists."
+  fi
+
   export PATH="$PATH:$dependencies_directory"
   #echo $PATH #only for debugging
 }
@@ -220,6 +233,33 @@ mirroring_to_cache_registry () {
   fi
 }
 
+
+# Obtaining the singing public key
+generate_public_key() {
+  local output_file="${working_directory}/signer-key.pub"
+
+  # Check if both required arguments are provided
+  if [ -z "${signer_email}" ]; then
+    echo "Usage: generate_gpg_public_key <signer_email> <output_file>"
+    exit 1
+  fi
+
+  # Execute the gpg command to generate the public key
+  (gpg --armor --export "$signer_email" > "$output_file") &
+  local process_pid=$!
+
+  wait "$process_pid"
+  local exit_code=$?
+  # Check the exit code of the gpg command
+  if [ $exit_code -eq 0 ]; then
+    echo "Public key successfully exported to $output_file"
+
+  else
+    echo "Error: Failed to export public key. Check the GPG command or key existence."
+    exit 1
+  fi
+}
+
 # Sign all the container base images mirrored to the Cache-Registry
 # Assumption here is that the self-signature its made available before the script is running
 signing_images () {
@@ -269,13 +309,133 @@ signing_images () {
   done < <(cat "${ImageListFile}" | awk -F= '{print $2}')
 }
 
+export master_yaml_config="---
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  labels:
+    machineconfiguration.openshift.io/role: master
+  name: 80-master-signatures
+spec:
+  config:
+    ignition:
+      version: 3.4.0
+    storage:
+      files:"
+export worker_yaml_config="---
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  labels:
+    machineconfiguration.openshift.io/role: worker
+  name: 80-worker-signatures
+spec:
+  config:
+    ignition:
+      version: 3.4.0
+    storage:
+      files:"
+
 # Prepare the /home/<username>/.local/share/containers/sigstore/signed/${target_tag}/Images[@]/ MachineConfig function
-sigstore_machineconfig () {
-  local sigstore_dir="${HOME}/.local/share/containers/sigstore/signed/"
-  local ImageListFile=$( cat sig-work-dir/mirroring-oc-mirror.log | grep -oP 'oc-mirror-workspace/results-\d+/mapping.txt' | head -n 1)
+#Support only the rootless account
+sigstore_signature () {
+  
+  while read -r line; do
+    # Extracting the relevant parts from the input line
+    image_path=$(echo "$line" | awk -F'/' '{print $NF}')
+    tag=${target_tag,,}
+    image_name=$(echo "$image_path" | awk -F'@' '{print $1}')
+    image_digest=$(echo "$image_path" | awk -F'=' '{print $2}')
+    base64_encoded_content=$(base64 -w 0 "$line")
+    echo "$line"
+    data_after_string=$(echo "$line" | awk -v tag="$tag" -F "$tag/" '{print $2}')
+    # Saving the extracted data to a variable
+    extracted_data="$data_after_string"
+    # Constructing the template and appending to master_yaml_config
+    master_yaml_config+="
+      - contents:
+          source: data:text/plain;charset=utf-8;base64,${base64_encoded_content}
+        mode: 420
+        overwrite: true
+        path: /var/lib/containers/sigstore/${target_tag,,}/${extracted_data}"
+    worker_yaml_config+="
+      - contents:
+          source: data:text/plain;charset=utf-8;base64,${base64_encoded_content}
+        mode: 420
+        overwrite: true
+        path: /var/lib/containers/sigstore/${target_tag,,}/${extracted_data}"
+  done < "$1"
+  # echo "$yaml_config" #only for debugging
+  
+  # Save the YAML configuration to a file
+  master_output_file="80-master-signatures.yaml"
+  echo "$master_yaml_config" > "${working_directory}/mc/${master_output_file}"
+  # Save the YAML configuration to a file
+  worker_output_file="80-worker-signatures.yaml"
+  echo "$worker_yaml_config" > "${working_directory}/mc/${worker_output_file}"
+
 }
 
+# templating the signer-key.pub
+template_machineconfig() {
 
+  # Check if all required are provided
+  if [ -e "${working_directory}/signer-key.pub" ] && [ -s "${working_directory}/signer-key.pub" ]; then
+    local signature_base64=$(base64 -w 0 "${working_directory}/signer-key.pub")
+    cat <<EOF > "${working_directory}/mc/01-master-signer-pub-key-machine-config.yaml"
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  labels:
+    machineconfiguration.openshift.io/role: master
+  name: 01-master-signer-pub-key
+spec:
+  config:
+    ignition:
+      version: 3.4.0
+    storage:
+      files:
+      - contents:
+          source: data:text/plain;charset=utf-8;base64,${signature_base64}
+        mode: 420
+        overwrite: true
+        path: /etc/pki/rpm-gpg/signer-key.pub
+EOF
+    cat <<EOF > "${working_directory}/mc/01-worker-signer-pub-key-machine-config.yaml"
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  labels:
+    machineconfiguration.openshift.io/role: worker
+  name: 01-worker-signer-pub-key
+spec:
+  config:
+    ignition:
+      version: 3.4.0
+    storage:
+      files:
+      - contents:
+          source: data:text/plain;charset=utf-8;base64,${signature_base64}
+        mode: 420
+        overwrite: true
+        path: /etc/pki/rpm-gpg/signer-key.pub
+EOF
+  else
+    echo "File: ${working_directory}/signer-key.pub does not exist or is empty."
+    return 1
+  fi
+
+
+}
+
+# https://docs.openshift.com/container-platform/4.14/security/container_security/security-container-signature.html
+#Expanding the 51-<node>-rh-registry-trust MachineConfig to cover the OfflineRegistry
+
+# Function to check if the process is running
+is_process_running() {
+  local process_name="$1"
+  pgrep -f "$process_name" > /dev/null
+}
 
 release_bundle () {
   #Creating the release bundle packing everything for air-gap environment availability
@@ -289,39 +449,81 @@ release_bundle () {
 
   # Get the current date in the format YYMMDD
   date_string=$(date +"%y%m%d")
+  local timeout_seconds=1800  # 30 minutes
+  local start_time=$(date +%s)
 
   # Define the archive file name with the date
-  archive_name="${target_tag,,}_${date_string}.tar.gz"
+  archive_name="${target_tag,,}.tar.gz"
+  local BundleCreationLogs="${archive_name}-bundle-creation.log"
   echo "==============================================================="
-  echo "Preparing ${archive_name}. Loading.."
+  echo "Preparing ${archive_name}."
   # Create the tar.gz archive
   # Use tar to create the archive
-  local BundleCreate=$(tar -czvf "${archive_name}" "${files_and_dirs[@]}")
-  local BundleCreationLogs="bundle-creation.log"
-  echo "${BundleCreationLogs}" > "${working_directory}/${BundleCreationLogs}"
-  if [ $? -eq 0 ]; then
+  # Start the process in the background
+  (tar -I pigz -cvf "${archive_name}" "${files_and_dirs[@]}" > "$(pwd)/${BundleCreationLogs}" 2>&1) &
+  local process_pid=$!
+  local elapsed_time=0
+
+  echo -n "Preparing ${archive_name}."
+  echo -n "Loading."
+
+  while kill -0 "$process_pid" 2> /dev/null; do
+    if [ $elapsed_time -gt $timeout_seconds ]; then
+      echo ""
+      echo "Error: Timeout exceeded. Process took more than 30 minutes."
+      exit 1
+    fi
+
+    echo -n "."
+    sleep 10
+    elapsed_time=$(( $(date +%s) - start_time ))
+  done
+  # echo -n "${elapsed_time}" just for debugging 
+  wait "$process_pid"
+  local exit_code=$?
+  echo ""
+  echo "${exit_code}"
+  if [ $exit_code -eq 0 ]; then
+    echo ""
     echo "Completed!"
     echo "Internal bundle release created: $(pwd)/${archive_name}"
   else
-    echo "Internal bundle release creationg failed. Please check logs: ${working_directory}/${BundleCreationLogs}"
+    echo ""
+    echo "Internal bundle release creation failed. Please check logs: $(pwd)/${BundleCreationLogs}"
     exit 1
   fi
+
   echo
   echo "==============================================================="
-  echo "Preparing ${archive_name}.sign. Loading.."
   # Once the bundle release has been created, make sure that it gets sign
-  # gpg --detach-sign --local-user midu@redhat.com --output 24r4-ocp-4.14.9-someone.24.01.27_240127.tar.gz.sign ./24r4-ocp-4.14.9-someone.24.01.27_240127.tar.gz
-  local BundleSign=$(gpg --detach-sign --local-user "${signer_email}" --output "$(pwd)/${archive_name}.sign" "$(pwd)/${archive_name}")
-  local BundleCreationSignLogs="bundle-creation-sign.log"
-  echo "${BundleCreationSignLogs}" > "${working_directory}/${BundleCreationSignLogs}"
-  if [ $? -eq 0 ]; then
+  # gpg --detach-sign --local-user midu@redhat.com --output 24r4-ocp-4.14.9-someone.24.01.27.tar.gz.sign ./24r4-ocp-4.14.9-someone.24.01.27.tar.gz
+  # local BundleSign=$(gpg --detach-sign --local-user "${signer_email}" --output "$(pwd)/${archive_name}.sign" "$(pwd)/${archive_name}")
+  local BundleCreationSignLogs="${archive_name}-bundle-sign-creation.log"
+  (gpg --detach-sign --local-user "${signer_email}" --output "$(pwd)/${archive_name}.sign" "$(pwd)/${archive_name}" > "$(pwd)/${BundleCreationSignLogs}" 2>&1) &
+  local process_pid=$!
+
+  echo "Preparing ${archive_name}.sign."
+  echo -n "Loading."
+  while kill -0 "$process_pid" 2> /dev/null; do
+    echo -n "."
+    sleep 10
+  done
+  # echo -n "${elapsed_time}" just for debugging 
+  wait "$process_pid"
+  local exit_code=$?
+  echo ""
+  echo "${exit_code}"
+  if [ $exit_code -eq 0 ]; then
     echo "Completed!"
     echo "Internal bundle release signature created: $(pwd)/${archive_name}.sign"
   else
-    echo "Internal bundle release creationg failed. Please check logs: ${working_directory}/${BundleCreationSignLogs}"
+    echo "Internal bundle release creationg failed. Please check logs: $(pwd)/${BundleCreationSignLogs}"
     exit 1
   fi
 }
+
+# Define a clean-up function 
+#This is intended to perform a cleanup of all the artefactory on the hoast only after specific input from administrator
 
 # OS Distribution validation
 
@@ -378,19 +580,19 @@ validate_dependencies() {
 }
 
 ## Usage
-#validate_dependencies
-#if [ $? -eq 0 ]; then
-#  echo "All dependencies are installed."
-#else
-#  echo "Dependency validation failed."
-#fi
+validate_dependencies
+if [ $? -eq 0 ]; then
+  echo "All dependencies are installed."
+else
+  echo "Dependency validation failed."
+fi
 # Example usage
-#validate_os_distribution
-#if [ $? -eq 0 ]; then
-#  echo "Operating system validation passed."
-#else
-#  echo "Operating system validation failed."
-#fi
+validate_os_distribution
+if [ $? -eq 0 ]; then
+  echo "Operating system validation passed."
+else
+  echo "Operating system validation failed."
+fi
 
 
 # Prepare the Internal Signed Build
@@ -406,6 +608,7 @@ original_string="${release_number}-ocp-${ocp_release_version}-someone"
 # Variables that will be encoded
 redhat_operator_index_catalog='registry.redhat.io/redhat/redhat-operator-index'
 redhat_binary_preparation_url='https://mirror.openshift.com/pub/openshift-v4/clients/ocp'
+redhat_butane_binary_url='https://mirror.openshift.com/pub/openshift-v4/clients/butane'
 # Get the current date in the format YY.MM.DD
 date_string=$(date +"%y.%m.%d")
 # Append the date string
@@ -419,9 +622,12 @@ stable_version="stable-$major_version.$minor_version"
 
 ocp_dependencies_checker
 # Example usage with a list of operators
-# operator_list=("advanced-cluster-management" "multicluster-engine" "topology-aware-lifecycle-manager" "openshift-gitops-operator" "cincinnati-operator" "odf-operator" "ptp-operator" "lvms-operator" "mcg-operator" "ocs-operator" "odf-csi-addons-operator" "sriov-network-operator" "cluster-logging" "local-storage-operator")
 working_dir_generator
 get_latest_version "${operator_list[@]}"
 mirroring_to_cache_registry
+generate_public_key
+template_machineconfig
 signing_images
+find "$HOME/.local/share/containers/sigstore/signed/24r4-ocp-4.14.9-someone.24.01.29/" -type f -name 'signature-1' > input_data.txt
+sigstore_signature "input_data.txt"
 release_bundle
