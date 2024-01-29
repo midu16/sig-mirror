@@ -531,12 +531,27 @@ command_exists () {
 
 # Function to validate dependencies
 validate_dependencies() {
-  local dependencies=("skopeo" "gpg" "netcat")
+  local dependencies=("skopeo" "podman" "netcat" "gpg")
 
   for dependency in "${dependencies[@]}"; do
     if ! command_exists "$dependency"; then
-      echo "Error: $dependency is not installed. Please install it before proceeding."
-      return 1
+      echo "Error: $dependency is not installed. Installing..."
+      
+      # Install the dependency based on the package manager (e.g., yum, dnf)
+      if command_exists "yum"; then
+        sudo yum install -y "$dependency"
+      elif command_exists "dnf"; then
+        sudo dnf install -y "$dependency"
+      else
+        echo "Error: Unsupported package manager. Please install $dependency manually."
+        return 1
+      fi
+      
+      # Check again after installation
+      if ! command_exists "$dependency"; then
+        echo "Error: Failed to install $dependency. Please install it manually."
+        return 1
+      fi
     fi
   done
 
