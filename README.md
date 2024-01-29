@@ -41,6 +41,7 @@ The following dependencies are required to run the `sig-mirror` tool:
 
 - yq: YAML processor.
 - skopeo: Command line utility used to interact with local and remote container images and container image registries
+- netcat: Utility is used for just about anything under the sun involving TCP, UDP, or Unix-domain sockets.
 - oc: OpenShift Client
     - oc-mirror: OpenShift Client plugin used for mirroring 
 - gpg: OpenPGP encryption and signing tool
