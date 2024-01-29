@@ -143,3 +143,6 @@ Make sure to replace "Your Name" and "your@email.com" with your actual name and 
 
 Please note that the provided template assumes that the `dependencies_checker` and `mirroring_to_cache_registry` functions are part of the script and that the `yq` dependency is necessary. Adjust the README accordingly if there are additional or different dependencies.
 ```
+## References
+
+[1] https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/9/html/building_running_and_managing_containers/assembly_signing-container-images_building-running-and-managing-containers

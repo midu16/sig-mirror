@@ -65,19 +65,19 @@ dependencies_checker () {
   fi
 
   # Public File URLs
-  yq_binary_url="https://github.com/mikefarah/yq/releases/download/v4.40.5/yq_linux_arm64.tar.gz"
+  yq_binary_url="https://github.com/mikefarah/yq/releases/download/v4.40.5/yq_linux_amd64.tar.gz"
   cosign_binary_url="https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64"
 
   # Check if yq binary exists, download and extract if not
   if [ ! -f "${dependencies_directory}/yq" ]; then
     # Download and extract yq
-    curl -sSL "${yq_binary_url}" -o "${dependencies_directory}/yq_linux_arm64.tar.gz"
+    curl -sSL "${yq_binary_url}" -o "${dependencies_directory}/yq_linux_amd64.tar.gz"
     # Untar the downloaded file in the specified directory
-    tar -xzvf "${dependencies_directory}/yq_linux_arm64.tar.gz" -C "${dependencies_directory}"
+    tar -xzvf "${dependencies_directory}/yq_linux_amd64.tar.gz" -C "${dependencies_directory}"
     # Make sure that the yq its executable
-    chmod +x "${dependencies_directory}/yq_linux_arm64"
+    chmod +x "${dependencies_directory}/yq_linux_amd64"
     # Changing the naming
-    mv "${dependencies_directory}/yq_linux_arm64" "${dependencies_directory}/yq"
+    mv "${dependencies_directory}/yq_linux_amd64" "${dependencies_directory}/yq"
   else
     echo "${dependencies_directory}/yq exists."
   fi
