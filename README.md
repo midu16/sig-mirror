@@ -25,13 +25,16 @@ Before using the `sig-mirror` tool, make sure to configure the necessary paramet
 
 Edit the `config.yaml` file to set the following parameters:
 
-- ocp_release_version: OpenShift Container Platform release version.
-- redhat_operator_index_version: Red Hat Operator Index version.
-- release_number: Release number for identification.
-- registry_fqdn: Fully qualified domain name of the cache registry.
-- registry_port: Port number of the cache registry.
-- operator_list: List of operators to mirror.
-- signer_email: `gpg` email-ID configured on the host for self-sign
+- ocp_release_version: Mandatory : OpenShift Container Platform release version.
+- redhat_operator_index_version: Mandatory : Red Hat Operator Index version.
+- release_number: Mandatory : Release number for identification.
+- registry_fqdn: Mandatory : Fully qualified domain name of the cache registry.
+- registry_port: Mandatory : Port number of the cache registry.
+- operator_list: Mandatory : List of operators to mirror.
+- signer_email: Optional : `gpg` email-ID configured on the host for self-sign.
+- path_signer_pub_key: Mandatory : Path to the signer-key.pub.
+- path_signer_passphrase: Mandatory : Path to the signer-passphrase used. Empty if no passphrase its being used.
+
 ## Dependencies
 
 The following dependencies are required to run the `sig-mirror` tool:
@@ -41,15 +44,94 @@ The following dependencies are required to run the `sig-mirror` tool:
 - oc: OpenShift Client
     - oc-mirror: OpenShift Client plugin used for mirroring 
 - gpg: OpenPGP encryption and signing tool
-- Cache-Registry certificates are known to the `sig-mirror` host
-- `config.yaml.example` represints an example config file.
+- `Cache-Registry` certificates are known to the `sig-mirror` host
+- `config.yaml.example` represints an example config file. The expected config file name its: `config.yaml`
+- Make sure that the `${HOME}/.docker/config.json` its made available with the right pull-secret to access the `Cache-Registry`
+- Make sure that the following configuration for the `Cache-Registry` its made available:
+
+:warning: **Make sure that the `rock5b.offline.oxtechnix.lan:5000` are replaced with the values from your environment** :warning:
+
+   - Adding the `Cache-Registry` public signatures in `/etc/containers/policy.json`:
+
+```bash
+$ cat /etc/containers/policy.json
+{
+    "default": [
+        {
+            "type": "insecureAcceptAnything"
+        }
+    ],
+    "transports": {
+        "docker": {
+	    "registry.access.redhat.com": [
+		{
+		    "type": "signedBy",
+		    "keyType": "GPGKeys",
+		    "keyPath": "/etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release"
+		}
+	    ],
+	    "registry.redhat.io": [
+		{
+		    "type": "signedBy",
+		    "keyType": "GPGKeys",
+		    "keyPath": "/etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release"
+		}
+	    ],
+	    "rock5b.offline.oxtechnix.lan:5000/signed": [
+		{
+		    "type": "sigstoreSigned",
+		    "keyPath": "/etc/pki/rpm-gpg/signer-key.pub"
+		 }
+        ]
+	},
+        "docker-daemon": {
+	    "": [
+		{
+		    "type": "insecureAcceptAnything"
+		}
+	    ]
+	}
+    }
+}
+```
+
+   - Adding the `Cache-Registry` definition in `/etc/containers/registries.d/rock5b.offline.oxtechnix.lan.yaml`:
+
+```bash
+$ cat /etc/containers/registries.d/rock5b.offline.oxtechnix.lan.yaml 
+docker:
+     rock5b.offline.oxtechnix.lan:5000:
+       use-sigstore-attachments: true
+
+```
 
 ## Installation
 
-Before running the `sig-mirror` tool, ensure that the required dependencies are installed. You can use the provided dependencies_checker function to automatically download and configure the dependencies.
+Before running the `sig-mirror` tool, ensure that the required dependencies are installed. You can use the provided function to automatically download and configure the binary dependencies.
 
 ```bash
-./sig-mirror.sh dependencies_checker
+$ ./sig-mirror
+Interactive CLI Interface
+==========================
+Enter an option (h for help, q to quit): h
+Usage: ./test_script.sh [OPTION]
+sig-mirror Interactive CLI Interface
+
+Options:
+  -h, --help      Display this help menu
+  -a, --dependency-check  Perform an dependency check of your environment. Make sure that binary dependencies are made available.
+  -b, --air-gap-bundle    Perform an Air-Gap Bundle Release Creation.
+  -c, --air-gap-mirror    Perform an Air-Gap Bundle Release Mirror to Offline Registry.TBD
+Enter an option (h for help, q to quit): --dependency-check
+Perform an dependency check of your environment
+Supported operating system: fedora
+Operating system validation passed.
+All dependencies are installed.
+/home/midu/sig-script/sig-work-dir/dependencies/yq exists.
+/home/midu/sig-script/sig-work-dir/dependencies/cosign exists.
+YAML file validation passed.
+Enter an option (h for help, q to quit): q
+Exiting...
 ```
 
 ## Contributing

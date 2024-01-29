@@ -19,3 +19,6 @@ operator_list:
   - 'cluster-logging'
   - 'local-storage-operator'
 signer_email: midu@redhat.com
+path_signer_public_key: 'signer/signer-key.pub'
+path_signer_private_key: 'signer/signer-key.private'
+path_signer_passphrase: 'signer/signer_passphrase'

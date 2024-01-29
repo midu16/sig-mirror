@@ -35,12 +35,14 @@ read_yaml () {
   export registry_port=$(yq e '.registry_port' "$yaml_file")
   export operator_list=($(yq e '.operator_list | join(" ")' "$yaml_file"))
   export signer_email=$(yq e '.signer_email' "$yaml_file")
+  export path_signer_public_key=$(yq e '.path_signer_public_key' "$yaml_file")
+  export path_signer_private_key=$(yq e '.path_signer_private_key' "$yaml_file")
+  export path_signer_passphrase=$(yq e '.path_signer_passphrase' "$yaml_file")
   # Check if required variables are missing
   if [ -z "$ocp_release_version" ] || [ -z "$redhat_operator_index_version" ] || \
      [ -z "$release_number" ] || [ -z "$registry_fqdn" ] || [ -z "$registry_port" ] || \
-     [ -z "$signer_email" ] || [ ${#operator_list[@]} -eq 0 ]; then
+     [ ${#operator_list[@]} -eq 0 ]; then
     echo "Error: Missing required variables in the YAML file."
-    return 1
     exit 1
   else
     echo "YAML file validation passed."
@@ -53,11 +55,13 @@ read_yaml () {
 dependencies_checker () {
   local dependencies_directory="${working_directory}/dependencies"
   local MachineConfigDirectory="${working_directory}/mc"
+  local SignatureDirectory="$(pwd)/signer"
   # Check if the dependencies directory exists
   if [ ! -d "${dependencies_directory}" ]; then
       # Create the working directory if it doesn't exist
       mkdir -p "${dependencies_directory}"
       mkdir -p "${MachineConfigDirectory}"
+      mkdir -p "${SignatureDirectory}"
   fi
 
   # Public File URLs
@@ -236,16 +240,17 @@ mirroring_to_cache_registry () {
 
 # Obtaining the singing public key
 generate_public_key() {
-  local output_file="${working_directory}/signer-key.pub"
-
+  local output_file="$(pwd)/signer/signer-key"
+  echo "${signer_passphrase}" > "$(pwd)/signer/signer_passphrase"
   # Check if both required arguments are provided
   if [ -z "${signer_email}" ]; then
-    echo "Usage: generate_gpg_public_key <signer_email> <output_file>"
+    echo "Usage: skopeo generate-sigstore-key --output-prefix <output_file> --passphrase-file <signer_passphrase> "
     exit 1
   fi
 
   # Execute the gpg command to generate the public key
-  (gpg --armor --export "$signer_email" > "$output_file") &
+  # skopeo generate-sigstore-key --output-prefix signer-key.pub --passphrase-file passphrase
+  (skopeo generate-sigstore-key --output-prefix "${output_file}" --passphrase-file "$(pwd)/signer/signer_passphrase") &
   local process_pid=$!
 
   wait "$process_pid"
@@ -282,7 +287,7 @@ signing_images () {
     echo "==============================================================="
     echo "Signing the operator image and push to Offline-Registry cache:"
     # Perform skopeo copy with signature
-    skopeo copy --sign-by "${signer_email}" "docker://${IMAGE}" "${DestImage}" --dest-tls-verify=false --src-tls-verify=false
+    skopeo copy --sign-by-sigstore-private-key "${path_signer_private_key}" --sign-passphrase-file "${path_signer_passphrase}" "docker://${IMAGE}" "${DestImage}" --dest-tls-verify=false --src-tls-verify=false
     # Validate the return code of each image processed.
     if [ $? -eq 0 ]; then
       echo "Image signed and pushed successfully to the Cache-Registry: ${registry_fqdn}:${registry_port} ."
@@ -336,52 +341,12 @@ spec:
     storage:
       files:"
 
-# Prepare the /home/<username>/.local/share/containers/sigstore/signed/${target_tag}/Images[@]/ MachineConfig function
-#Support only the rootless account
-sigstore_signature () {
-  
-  while read -r line; do
-    # Extracting the relevant parts from the input line
-    image_path=$(echo "$line" | awk -F'/' '{print $NF}')
-    tag=${target_tag,,}
-    image_name=$(echo "$image_path" | awk -F'@' '{print $1}')
-    image_digest=$(echo "$image_path" | awk -F'=' '{print $2}')
-    base64_encoded_content=$(base64 -w 0 "$line")
-    echo "$line"
-    data_after_string=$(echo "$line" | awk -v tag="$tag" -F "$tag/" '{print $2}')
-    # Saving the extracted data to a variable
-    extracted_data="$data_after_string"
-    # Constructing the template and appending to master_yaml_config
-    master_yaml_config+="
-      - contents:
-          source: data:text/plain;charset=utf-8;base64,${base64_encoded_content}
-        mode: 420
-        overwrite: true
-        path: /var/lib/containers/sigstore/${target_tag,,}/${extracted_data}"
-    worker_yaml_config+="
-      - contents:
-          source: data:text/plain;charset=utf-8;base64,${base64_encoded_content}
-        mode: 420
-        overwrite: true
-        path: /var/lib/containers/sigstore/${target_tag,,}/${extracted_data}"
-  done < "$1"
-  # echo "$yaml_config" #only for debugging
-  
-  # Save the YAML configuration to a file
-  master_output_file="80-master-signatures.yaml"
-  echo "$master_yaml_config" > "${working_directory}/mc/${master_output_file}"
-  # Save the YAML configuration to a file
-  worker_output_file="80-worker-signatures.yaml"
-  echo "$worker_yaml_config" > "${working_directory}/mc/${worker_output_file}"
-
-}
-
 # templating the signer-key.pub
 template_machineconfig() {
 
   # Check if all required are provided
-  if [ -e "${working_directory}/signer-key.pub" ] && [ -s "${working_directory}/signer-key.pub" ]; then
-    local signature_base64=$(base64 -w 0 "${working_directory}/signer-key.pub")
+  if [ -e "${path_signer_public_key}" ] && [ -s "${path_signer_public_key}" ]; then
+    local signature_base64=$(base64 -w 0 "${path_signer_public_key}")
     cat <<EOF > "${working_directory}/mc/01-master-signer-pub-key-machine-config.yaml"
 apiVersion: machineconfiguration.openshift.io/v1
 kind: MachineConfig
@@ -421,8 +386,8 @@ spec:
         path: /etc/pki/rpm-gpg/signer-key.pub
 EOF
   else
-    echo "File: ${working_directory}/signer-key.pub does not exist or is empty."
-    return 1
+    echo "File: ${path_signer_public_key} does not exist or is empty."
+    exit 1
   fi
 
 
@@ -499,7 +464,7 @@ release_bundle () {
   # gpg --detach-sign --local-user midu@redhat.com --output 24r4-ocp-4.14.9-someone.24.01.27.tar.gz.sign ./24r4-ocp-4.14.9-someone.24.01.27.tar.gz
   # local BundleSign=$(gpg --detach-sign --local-user "${signer_email}" --output "$(pwd)/${archive_name}.sign" "$(pwd)/${archive_name}")
   local BundleCreationSignLogs="${archive_name}-bundle-sign-creation.log"
-  (gpg --detach-sign --local-user "${signer_email}" --output "$(pwd)/${archive_name}.sign" "$(pwd)/${archive_name}" > "$(pwd)/${BundleCreationSignLogs}" 2>&1) &
+  (gpg --detach-sign -a --output "$(pwd)/${archive_name}.sign" "$(pwd)/${archive_name}" > "$(pwd)/${BundleCreationSignLogs}" 2>&1) &
   local process_pid=$!
 
   echo "Preparing ${archive_name}.sign."
@@ -526,7 +491,6 @@ release_bundle () {
 #This is intended to perform a cleanup of all the artefactory on the hoast only after specific input from administrator
 
 # OS Distribution validation
-
 # Function to get the operating system distribution
 get_os_distribution () {
   if [ -e /etc/os-release ]; then
@@ -567,7 +531,7 @@ command_exists () {
 
 # Function to validate dependencies
 validate_dependencies() {
-  local dependencies=("podman" "skopeo" "gpg")
+  local dependencies=("skopeo" "gpg")
 
   for dependency in "${dependencies[@]}"; do
     if ! command_exists "$dependency"; then
@@ -579,55 +543,96 @@ validate_dependencies() {
   return 0
 }
 
-## Usage
-validate_dependencies
-if [ $? -eq 0 ]; then
-  echo "All dependencies are installed."
-else
-  echo "Dependency validation failed."
-fi
-# Example usage
-validate_os_distribution
-if [ $? -eq 0 ]; then
-  echo "Operating system validation passed."
-else
-  echo "Operating system validation failed."
-fi
+# Function to display the help menu
+display_help() {
+  echo "Usage: $0 [OPTION]"
+  echo "sig-mirror Interactive CLI Interface"
+  echo ""
+  echo "Options:"
+  echo "  -h, --help      Display this help menu"
+  echo "  -a, --dependency-check  Perform an dependency check of your environment. Make sure that binary dependencies are made available."
+  echo "  -b, --air-gap-bundle    Perform an Air-Gap Bundle Release Creation."
+  echo "  -c, --air-gap-mirror    Perform an Air-Gap Bundle Release Mirror to Offline Registry.TBD"
+}
+#
+## Interactive CLI interface
+echo "Interactive CLI Interface"
+echo "=========================="
 
+while true; do
+  read -p "Enter an option (h for help, q to quit): " user_input
 
-# Prepare the Internal Signed Build
-# _main_
-# Variable that defines the signature-working-directory
-working_directory="$(pwd)/sig-work-dir"
-
-dependencies_checker
-read_yaml "config.yaml"
-
-# Defining the static Variables
-original_string="${release_number}-ocp-${ocp_release_version}-someone"
-# Variables that will be encoded
-redhat_operator_index_catalog='registry.redhat.io/redhat/redhat-operator-index'
-redhat_binary_preparation_url='https://mirror.openshift.com/pub/openshift-v4/clients/ocp'
-redhat_butane_binary_url='https://mirror.openshift.com/pub/openshift-v4/clients/butane'
-# Get the current date in the format YY.MM.DD
-date_string=$(date +"%y.%m.%d")
-# Append the date string
-target_tag="${original_string}.${date_string}"
-# Extract major and minor versions
-major_version=$(echo "$ocp_release_version" | cut -d. -f1)
-minor_version=$(echo "$ocp_release_version" | cut -d. -f2)
-# Construct 'stable' version
-stable_version="stable-$major_version.$minor_version"
-################################################################################
-
-ocp_dependencies_checker
-# Example usage with a list of operators
-working_dir_generator
-get_latest_version "${operator_list[@]}"
-mirroring_to_cache_registry
-generate_public_key
-template_machineconfig
-signing_images
-find "$HOME/.local/share/containers/sigstore/signed/24r4-ocp-4.14.9-someone.24.01.29/" -type f -name 'signature-1' > input_data.txt
-sigstore_signature "input_data.txt"
-release_bundle
+  case $user_input in
+    h|--help)
+      display_help
+      ;;
+    a|--dependency-check)
+      echo "Perform an dependency check of your environment"
+      validate_os_distribution
+      if [ $? -eq 0 ]; then
+        echo "Operating system validation passed."
+        validate_dependencies
+        if [ $? -eq 0 ]; then
+          echo "All dependencies are installed."
+          # Variable that defines the signature-working-directory
+          working_directory="$(pwd)/sig-work-dir"
+          dependencies_checker
+          read_yaml "config.yaml"
+        else
+          echo "Dependency validation failed."
+        fi
+        else
+          echo "Operating system validation failed."
+      fi
+      ;;
+    b|--air-gap-bundle)
+      echo "Perform an Air-Gap Bundle Release Creation."
+      validate_os_distribution
+      if [ $? -eq 0 ]; then
+        echo "Operating system validation passed."
+        validate_dependencies
+        if [ $? -eq 0 ]; then
+          echo "All dependencies are installed."
+          # Variable that defines the signature-working-directory
+          working_directory="$(pwd)/sig-work-dir"
+          dependencies_checker
+          read_yaml "config.yaml"
+          # Defining the static Variables
+          original_string="${release_number}-ocp-${ocp_release_version}-someone"
+          # Variables that will be encoded
+          redhat_operator_index_catalog='registry.redhat.io/redhat/redhat-operator-index'
+          redhat_binary_preparation_url='https://mirror.openshift.com/pub/openshift-v4/clients/ocp'
+          redhat_butane_binary_url='https://mirror.openshift.com/pub/openshift-v4/clients/butane'
+          # Get the current date in the format YY.MM.DD
+          date_string=$(date +"%y.%m.%d")
+          # Append the date string
+          target_tag="${original_string}.${date_string}"
+          # Extract major and minor versions
+          major_version=$(echo "$ocp_release_version" | cut -d. -f1)
+          minor_version=$(echo "$ocp_release_version" | cut -d. -f2)
+          # Construct 'stable' version
+          stable_version="stable-$major_version.$minor_version"
+          ################################################################################
+          ocp_dependencies_checker
+          working_dir_generator
+          get_latest_version "${operator_list[@]}"
+          mirroring_to_cache_registry
+          template_machineconfig
+          signing_images
+          release_bundle
+        else
+          echo "Dependency validation failed."
+        fi
+        else
+          echo "Operating system validation failed."
+      fi
+      ;;
+    q|quit)
+      echo "Exiting..."
+      break
+      ;;
+    *)
+      echo "Invalid option. Type 'h' for help."
+      ;;
+  esac
+done
