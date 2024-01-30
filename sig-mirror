@@ -237,7 +237,7 @@ mirror:
 # We will have to mirror the content to a Semy-Offline Cache-Registry
 mirroring_to_cache_registry () {
   # Run netcat command and capture the output
-  local netcat_output=$(netcat -z -v "${registry_fqdn}" "${registry_port}" 2>&1)
+  local netcat_output=$(nc -z -v "${registry_fqdn}" "${registry_port}" 2>&1)
   echo $netcat_output
   # Check if the output includes "succeeded"
   if echo "$netcat_output" | grep -q "succeeded"; then
@@ -553,7 +553,7 @@ command_exists () {
 
 # Function to validate dependencies
 validate_dependencies() {
-  local dependencies=("skopeo" "podman" "netcat" "gpg")
+  local dependencies=("skopeo" "podman" "nc" "gpg")
 
   for dependency in "${dependencies[@]}"; do
     if ! command_exists "$dependency"; then
