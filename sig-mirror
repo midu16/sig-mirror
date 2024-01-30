@@ -216,9 +216,8 @@ mirror:
 mirroring_to_cache_registry () {
   # Run netcat command and capture the output
   local netcat_output=$(nc -z -v "${registry_fqdn}" "${registry_port}" 2>&1)
-  echo $netcat_output
   # Check if the output includes "succeeded"
-  if echo "$netcat_output" | grep -q "succeeded"; then
+  if [ $? -eq 0 ]; then
     echo "Connection succeeded to the Cache-Registry. Proceeding with mirroring."
     # Run oc-mirror command mirror the packages to the Cache-Registry and capture the output
     local mirroring_to_cache_registry_var=$(oc-mirror --config "${working_directory}/imageset-config.yaml" "docker://${registry_fqdn}:${registry_port}/${target_tag,,}" --dest-skip-tls=true)
