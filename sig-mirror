@@ -26,27 +26,49 @@ read_yaml () {
     echo "Error: YAML file '$yaml_file' not found."
     exit 1
   fi
-
-  # Read variables from YAML file
-  export ocp_release_version=$(yq e '.ocp_release_version' "$yaml_file")
-  export redhat_operator_index_version=$(yq e '.redhat_operator_index_version' "$yaml_file")
-  export release_number=$(yq e '.release_number' "$yaml_file")
-  export registry_fqdn=$(yq e '.registry_fqdn' "$yaml_file")
-  export registry_port=$(yq e '.registry_port' "$yaml_file")
-  export operator_list=($(yq e '.operator_list | join(" ")' "$yaml_file"))
-  export signer_email=$(yq e '.signer_email' "$yaml_file")
-  export path_signer_public_key=$(yq e '.path_signer_public_key' "$yaml_file")
-  export path_signer_private_key=$(yq e '.path_signer_private_key' "$yaml_file")
-  export path_signer_passphrase=$(yq e '.path_signer_passphrase' "$yaml_file")
-  # Check if required variables are missing
-  if [ -z "$ocp_release_version" ] || [ -z "$redhat_operator_index_version" ] || \
-     [ -z "$release_number" ] || [ -z "$registry_fqdn" ] || [ -z "$registry_port" ] || \
-     [ ${#operator_list[@]} -eq 0 ]; then
-    echo "Error: Missing required variables in the YAML file."
-    exit 1
+  # 
+  if [ "$yaml_file" == "config.yaml" ]; then
+    # Read variables from YAML file
+    export ocp_release_version=$(yq e '.ocp_release_version' "$yaml_file")
+    export redhat_operator_index_version=$(yq e '.redhat_operator_index_version' "$yaml_file")
+    export release_number=$(yq e '.release_number' "$yaml_file")
+    export registry_fqdn=$(yq e '.registry_fqdn' "$yaml_file")
+    export registry_port=$(yq e '.registry_port' "$yaml_file")
+    export operator_list=($(yq e '.operator_list | join(" ")' "$yaml_file"))
+    export signer_email=$(yq e '.signer_email' "$yaml_file")
+    export path_signer_public_key=$(yq e '.path_signer_public_key' "$yaml_file")
+    export path_signer_private_key=$(yq e '.path_signer_private_key' "$yaml_file")
+    export path_signer_passphrase=$(yq e '.path_signer_passphrase' "$yaml_file")
+    # Check if required variables are missing
+    if [ -z "$ocp_release_version" ] || [ -z "$redhat_operator_index_version" ] || \
+      [ -z "$release_number" ] || [ -z "$registry_fqdn" ] || [ -z "$registry_port" ] || \
+      [ ${#operator_list[@]} -eq 0 ]; then
+      echo "Error: Missing required variables in the YAML file."
+      exit 1
+    else
+      echo "YAML file validation passed."
+      return 0
+    fi
+  elif [[ "$yaml_file" == "air-gap-config.yaml" ]]; then
+    # Read variables from YAML file
+    export ocp_release_version=$(yq e '.ocp_release_version' "$yaml_file")
+    export release_number=$(yq e '.release_number' "$yaml_file")
+    export registry_fqdn=$(yq e '.registry_fqdn' "$yaml_file")
+    export registry_port=$(yq e '.registry_port' "$yaml_file")
+    export path_signer_public_key=$(yq e '.path_signer_public_key' "$yaml_file")
+    export path_signer_private_key=$(yq e '.path_signer_private_key' "$yaml_file")
+    export path_signer_passphrase=$(yq e '.path_signer_passphrase' "$yaml_file")
+    # Check if required variables are missing
+    if [ -z "$ocp_release_version" ] || [ -z "$redhat_operator_index_version" ] || \
+      [ -z "$release_number" ] || [ -z "$registry_fqdn" ] || [ -z "$registry_port" ]; then
+      echo "Error: Missing required variables in the YAML file."
+      exit 1
+    else
+      echo "YAML file validation passed."
+      return 0
+    fi
   else
-    echo "YAML file validation passed."
-    return 0
+    echo "Unknown configuration file: $yaml_file"
   fi
 
 }
