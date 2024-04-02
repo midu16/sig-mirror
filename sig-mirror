@@ -530,7 +530,7 @@ command_exists () {
 
 # Function to validate dependencies
 validate_dependencies() {
-  local dependencies=("skopeo" "podman" "nc" "gpg")
+  local dependencies=("skopeo" "podman" "nc" "gpg" "pigz")
 
   for dependency in "${dependencies[@]}"; do
     if ! command_exists "$dependency"; then
