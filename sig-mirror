@@ -173,11 +173,11 @@ mirror:
       minVersion: "${ocp_release_version}"
       maxVersion: "${ocp_release_version}"
       type: ocp
-    graph: true
+    graph: false
   operators:
     - catalog: \"${redhat_operator_index_catalog}:${redhat_operator_index_version}\"
-      targetName: "redhat-operator-index"
-      targetTag: "${target_tag}"
+      targetName:  "redhat-operator-index"
+      targetTag: \"${target_tag}\"
       packages:"
 
   for operator_name in "${operator_names[@]}"; do
@@ -221,7 +221,7 @@ mirroring_to_cache_registry () {
     echo "Connection succeeded to the Cache-Registry. Proceeding with mirroring."
     # Run oc-mirror command mirror the packages to the Cache-Registry and capture the output
     local mirroring_to_cache_registry_var=$(oc-mirror --config "${working_directory}/imageset-config.yaml" "docker://${registry_fqdn}:${registry_port}/${target_tag,,}" --dest-skip-tls=true)
-    # echo ${mirroring_to_cache_registry_var}
+    #echo ${mirroring_to_cache_registry_var}
     # Check the return code
     if [ $? -eq 0 ]; then
       echo "imageset-config.yaml mirroring is complete."
@@ -238,31 +238,31 @@ mirroring_to_cache_registry () {
 
 
 # Obtaining the singing public key
-generate_public_key() {
-  local output_file="$(pwd)/signer/signer-key"
-  echo "${signer_passphrase}" > "$(pwd)/signer/signer_passphrase"
-  # Check if both required arguments are provided
-  if [ -z "${signer_email}" ]; then
-    echo "Usage: skopeo generate-sigstore-key --output-prefix <output_file> --passphrase-file <signer_passphrase> "
-    exit 1
-  fi
+# generate_public_key() {
+#   local output_file="$(pwd)/signer/signer-key"
+#   echo "${signer_passphrase}" > "$(pwd)/signer/signer_passphrase"
+#   # Check if both required arguments are provided
+#   if [ -z "${signer_email}" ]; then
+#     echo "Usage: skopeo generate-sigstore-key --output-prefix <output_file> --passphrase-file <signer_passphrase> "
+#     exit 1
+#   fi
 
-  # Execute the gpg command to generate the public key
-  # skopeo generate-sigstore-key --output-prefix signer-key.pub --passphrase-file passphrase
-  (skopeo generate-sigstore-key --output-prefix "${output_file}" --passphrase-file "$(pwd)/signer/signer_passphrase") &
-  local process_pid=$!
+#   # Execute the gpg command to generate the public key
+#   # skopeo generate-sigstore-key --output-prefix signer-key.pub --passphrase-file passphrase
+#   (skopeo generate-sigstore-key --output-prefix "${output_file}" --passphrase-file "$(pwd)/signer/signer_passphrase") &
+#   local process_pid=$!
 
-  wait "$process_pid"
-  local exit_code=$?
-  # Check the exit code of the gpg command
-  if [ $exit_code -eq 0 ]; then
-    echo "Public key successfully exported to $output_file"
+#   wait "$process_pid"
+#   local exit_code=$?
+#   # Check the exit code of the gpg command
+#   if [ $exit_code -eq 0 ]; then
+#     echo "Public key successfully exported to $output_file"
 
-  else
-    echo "Error: Failed to export public key. Check the GPG command or key existence."
-    exit 1
-  fi
-}
+#   else
+#     echo "Error: Failed to export public key. Check the GPG command or key existence."
+#     exit 1
+#   fi
+# }
 
 # Sign all the container base images mirrored to the Cache-Registry
 # Assumption here is that the self-signature its made available before the script is running
@@ -275,18 +275,51 @@ signing_images () {
       # Create the working directory if it doesn't exist
       mkdir -p "$InternalReleaseDir"
   fi
+
+
+  # Create Local ImageSetConfig for the oc-mirror
+  local_yaml_config="---
+apiVersion: mirror.openshift.io/v1alpha2
+kind: ImageSetConfiguration
+storageConfig:
+  local:
+    path: ./mirror-metadata
+mirror:
+  platform:
+    channels:
+    - name: "${stable_version}"
+      minVersion: "${ocp_release_version}" 
+      maxVersion: "${ocp_release_version}"
+      type: ocp
+    graph: false
+  operators:
+    - catalog: \"${registry_fqdn}:${registry_port}/${target_tag,,}/redhat/redhat-operator-index:${target_tag}\"
+      targetName: "redhat-operator-index"
+      targetTag: \"${target_tag}\"
+      packages:
+      - name: topology-aware-lifecycle-manager
+        channels:
+        - name: stable"
+
+  # Save the YAML configuration to a file
+  output_file="imageset-config-local.yaml"
+  echo "$local_yaml_config" > "${working_directory}/${output_file}"
+  echo "=============================================="
+  echo "Generated YAML file for ${operator_name}: ${output_file}"
+  echo "=============================================="
   # Read the list of images
   while IFS= read -r IMAGE; do
     # Extract image details
     SourceImage=$(echo "$IMAGE" | cut -d'/' -f2-)
     echo $SourceImage >> "${working_directory}/bundle-mirror.log"
     DestImage="docker://${registry_fqdn}:${registry_port}/signed/${SourceImage}"
-    
     IMAGE_NAME_DIGEST=$(echo "$IMAGE" | awk -F'/' '{print $NF}')
     echo "==============================================================="
     echo "Signing the operator image and push to Offline-Registry cache:"
     # Perform skopeo copy with signature
-    skopeo copy --sign-by-sigstore-private-key "${path_signer_private_key}" --sign-passphrase-file "${path_signer_passphrase}" "docker://${IMAGE}" "${DestImage}" --dest-tls-verify=false --src-tls-verify=false
+    #skopeo copy --sign-by-sigstore-private-key "${path_signer_private_key}" --sign-passphrase-file "${path_signer_passphrase}" "docker://${IMAGE}" "${DestImage}" --dest-tls-verify=false --src-tls-verify=false
+    podman pull "${IMAGE}" 
+    podman push --remove-signatures --sign-by-sigstore-private-key "${path_signer_private_key}" --sign-passphrase-file "${path_signer_passphrase}"  --tls-verify=false "${IMAGE}"
     # Validate the return code of each image processed.
     if [ $? -eq 0 ]; then
       echo "Image signed and pushed successfully to the Cache-Registry: ${registry_fqdn}:${registry_port} ."
@@ -296,21 +329,24 @@ signing_images () {
     fi
 
     echo "---------------------------------------------------------------"
-    echo "Preparing the localhost directory clone:"    
-    # Perform skopeo copy to local directory to prepare the bundle.tar.gz
-    skopeo copy --format oci "${DestImage}" "dir:${InternalReleaseDir}/${IMAGE_NAME_DIGEST}"
-    # Validate the return code of each image processed.
-    if [ $? -eq 0 ]; then
-      echo "Image copied to local directory successfully."
-    else
-      echo "Error: Failed to copy the image: ${IMAGE} to the local directory."
-      exit 1
-    fi
+
 
     # skopeo copy "dir:${InternalReleaseDir}/${IMAGE_NAME_DIGEST}" "docker://inbacrnrdl0100.offline.oxtechnix.lan:5000/${target_tag,,}/${IMAGE_NAME_DIGEST}"
     # Print a newline for better readability
     echo
   done < <(cat "${ImageListFile}" | awk -F= '{print $2}')
+
+  echo "Mirroring the remote signed images to a local directory"    
+  # Perform skopeo copy to local directory to prepare the bundle.tar.gz
+  # skopeo copy --format oci "${DestImage}" "dir:${InternalReleaseDir}/${IMAGE_NAME_DIGEST}"
+  oc-mirror  --config  "${working_directory}/imageset-config-local.yaml" file://mirror-to-disk --dest-skip-tls=true 
+  # Validate the return code of each image processed.
+  if [ $? -eq 0 ]; then
+    echo "Image copied to local directory successfully."
+  else
+    echo "Error: Failed to copy the image: ${IMAGE} to the local directory."
+    exit 1
+  fi  
 }
 
 export master_yaml_config="---
